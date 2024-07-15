@@ -14,6 +14,9 @@ export type ReactIntegrationOptions = Pick<
 	'include' | 'exclude' | 'babel'
 > & {
 	experimentalReactChildren?: boolean;
+	/**
+	 * Disable streaming support for React components in order to support libraries that are not compatible with streaming like Stitches.js
+	 */
 	experimentalDisableStreaming?: boolean;
 };
 
@@ -27,7 +30,10 @@ function getRenderer(reactConfig: ReactVersionConfig) {
 	};
 }
 
-function optionsPlugin(experimentalReactChildren: boolean, experimentalDisableStreaming: boolean): vite.Plugin {
+function optionsPlugin(
+	experimentalReactChildren: boolean,
+	experimentalDisableStreaming: boolean
+): vite.Plugin {
 	const virtualModule = 'astro:react:opts';
 	const virtualModuleId = '\0' + virtualModule;
 	return {
@@ -51,7 +57,13 @@ function optionsPlugin(experimentalReactChildren: boolean, experimentalDisableSt
 }
 
 function getViteConfiguration(
-	{ include, exclude, babel, experimentalReactChildren, experimentalDisableStreaming }: ReactIntegrationOptions = {},
+	{
+		include,
+		exclude,
+		babel,
+		experimentalReactChildren,
+		experimentalDisableStreaming,
+	}: ReactIntegrationOptions = {},
 	reactConfig: ReactVersionConfig
 ) {
 	return {
@@ -65,7 +77,10 @@ function getViteConfiguration(
 			],
 			exclude: [reactConfig.server],
 		},
-		plugins: [react({ include, exclude, babel }), optionsPlugin(!!experimentalReactChildren, !!experimentalDisableStreaming)],
+		plugins: [
+			react({ include, exclude, babel }),
+			optionsPlugin(!!experimentalReactChildren, !!experimentalDisableStreaming),
+		],
 		resolve: {
 			dedupe: ['react', 'react-dom', 'react-dom/server'],
 		},

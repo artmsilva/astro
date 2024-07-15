@@ -31,17 +31,17 @@ async function check(Component, props, children) {
 
 	if (Component.prototype != null && typeof Component.prototype.render === 'function') {
 		return React.Component.isPrototypeOf(Component) || React.PureComponent.isPrototypeOf(Component);
-  }
+	}
 
 	let error = null;
 	let isReactComponent = false;
 	function Tester(...args) {
 		try {
-      const vnode = Component(...args);
-      if (vnode && vnode['$$typeof'] === reactTypeof) {
+			const vnode = Component(...args);
+			if (vnode && vnode['$$typeof'] === reactTypeof) {
 				isReactComponent = true;
 			}
-    } catch (err) {
+		} catch (err) {
 			if (!errorIsComingFromPreactComponent(err)) {
 				error = err;
 			}
