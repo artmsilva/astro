@@ -33,20 +33,29 @@ describe('shiki syntax highlighting', () => {
 	it('createShikiHighlighter works', async () => {
 		const highlighter = await createShikiHighlighter();
 
-		const html = await highlighter.highlight('const foo = "bar";', 'js');
+		const html = await highlighter.codeToHtml('const foo = "bar";', 'js');
 
 		assert.match(html, /astro-code github-dark/);
 		assert.match(html, /background-color:#24292e;color:#e1e4e8;/);
 	});
 
+	it('createShikiHighlighter works with codeToHast', async () => {
+		const highlighter = await createShikiHighlighter();
+
+		const hast = await highlighter.codeToHast('const foo = "bar";', 'js');
+
+		assert.match(hast.children[0].properties.class, /astro-code github-dark/);
+		assert.match(hast.children[0].properties.style, /background-color:#24292e;color:#e1e4e8;/);
+	});
+
 	it('diff +/- text has user-select: none', async () => {
 		const highlighter = await createShikiHighlighter();
 
-		const html = await highlighter.highlight(
+		const html = await highlighter.codeToHtml(
 			`\
 - const foo = "bar";
 + const foo = "world";`,
-			'diff'
+			'diff',
 		);
 
 		assert.match(html, /user-select: none/);
@@ -57,7 +66,7 @@ describe('shiki syntax highlighting', () => {
 	it('renders attributes', async () => {
 		const highlighter = await createShikiHighlighter();
 
-		const html = await highlighter.highlight(`foo`, 'js', {
+		const html = await highlighter.codeToHtml(`foo`, 'js', {
 			attributes: { 'data-foo': 'bar', autofocus: true },
 		});
 
@@ -66,7 +75,10 @@ describe('shiki syntax highlighting', () => {
 	});
 
 	it('supports transformers that reads meta', async () => {
-		const highlighter = await createShikiHighlighter({
+		const highlighter = await createShikiHighlighter();
+
+		const html = await highlighter.codeToHtml(`foo`, 'js', {
+			meta: '{1,3-4}',
 			transformers: [
 				{
 					pre(node) {
@@ -79,10 +91,50 @@ describe('shiki syntax highlighting', () => {
 			],
 		});
 
-		const html = await highlighter.highlight(`foo`, 'js', {
-			meta: '{1,3-4}',
+		assert.match(html, /data-test="\{1,3-4\}"/);
+	});
+
+	it('supports the defaultColor setting', async () => {
+		const processor = await createMarkdownProcessor({
+			shikiConfig: {
+				themes: {
+					light: 'github-light',
+					dark: 'github-dark',
+				},
+				defaultColor: false,
+			},
+		});
+		const { code } = await processor.render('```\ntest\n```');
+
+		// Doesn't have `color` or `background-color` properties.
+		assert.doesNotMatch(code, /color:/);
+	});
+
+	it('the highlighter supports lang alias', async () => {
+		const highlighter = await createShikiHighlighter({
+			langAlias: {
+				cjs: 'javascript',
+			},
 		});
 
-		assert.match(html, /data-test="\{1,3-4\}"/);
+		const html = await highlighter.codeToHtml(`let test = "some string"`, 'cjs', {
+			attributes: { 'data-foo': 'bar', autofocus: true },
+		});
+
+		assert.match(html, /data-language="cjs"/);
+	});
+
+	it('the markdown processsor support lang alias', async () => {
+		const processor = await createMarkdownProcessor({
+			shikiConfig: {
+				langAlias: {
+					cjs: 'javascript',
+				},
+			},
+		});
+
+		const { code } = await processor.render('```cjs\nlet foo = "bar"\n```');
+
+		assert.match(code, /data-language="cjs"/);
 	});
 });

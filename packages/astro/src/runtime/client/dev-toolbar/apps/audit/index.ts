@@ -1,4 +1,4 @@
-import type { DevToolbarApp } from '../../../../../@types/astro.js';
+import type { ResolvedDevToolbarApp } from '../../../../../types/public/toolbar.js';
 import { settings } from '../../settings.js';
 import type { DevToolbarHighlight } from '../../ui-library/highlight.js';
 import { positionHighlight } from '../utils/highlight.js';
@@ -21,7 +21,7 @@ export type Audit = {
 try {
 	customElements.define('astro-dev-toolbar-audit-window', DevToolbarAuditListWindow);
 	customElements.define('astro-dev-toolbar-audit-list-item', DevToolbarAuditListItem);
-} catch (e) {}
+} catch {}
 
 let showState = false;
 
@@ -32,7 +32,7 @@ export default {
 	async init(canvas, eventTarget) {
 		let audits: Audit[] = [];
 		let auditWindow = document.createElement(
-			'astro-dev-toolbar-audit-window'
+			'astro-dev-toolbar-audit-window',
 		) as DevToolbarAuditListWindow;
 		let hasCreatedUI = false;
 
@@ -60,7 +60,7 @@ export default {
 								if (showState) createAuditsUI();
 							});
 						},
-						{ timeout: 300 }
+						{ timeout: 300 },
 					);
 				} else {
 					// Fallback for old versions of Safari, we'll assume that things are less likely to be busy after 150ms.
@@ -174,7 +174,7 @@ export default {
 					detail: {
 						state: audits.length > 0,
 					},
-				})
+				}),
 			);
 		}
 
@@ -219,4 +219,4 @@ export default {
 			});
 		}
 	},
-} satisfies DevToolbarApp;
+} satisfies ResolvedDevToolbarApp;

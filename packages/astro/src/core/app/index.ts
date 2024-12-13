@@ -1,17 +1,17 @@
-import type { ManifestData, RouteData, SSRManifest } from '../../@types/astro.js';
 import { normalizeTheLocale } from '../../i18n/index.js';
+import type { ManifestData } from '../../types/astro.js';
+import type { RouteData, SSRManifest } from '../../types/public/internal.js';
 import {
 	REROUTABLE_STATUS_CODES,
 	REROUTE_DIRECTIVE_HEADER,
 	clientAddressSymbol,
-	clientLocalsSymbol,
 	responseSentSymbol,
 } from '../constants.js';
 import { getSetCookiesFromResponse } from '../cookies/index.js';
 import { AstroError, AstroErrorData } from '../errors/index.js';
 import { consoleLogDestination } from '../logger/console.js';
 import { AstroIntegrationLogger, Logger } from '../logger/core.js';
-import { sequence } from '../middleware/index.js';
+import { NOOP_MIDDLEWARE_FN } from '../middleware/noop-middleware.js';
 import {
 	appendForwardSlash,
 	joinPaths,
@@ -20,10 +20,10 @@ import {
 } from '../path.js';
 import { RenderContext } from '../render-context.js';
 import { createAssetLink } from '../render/ssr-element.js';
-import { ensure404Route } from '../routing/astro-designed-error-pages.js';
+import { createDefaultRoutes, injectDefaultRoutes } from '../routing/default.js';
 import { matchRoute } from '../routing/match.js';
-import { createOriginCheckMiddleware } from './middlewares.js';
 import { AppPipeline } from './pipeline.js';
+
 export { deserializeManifest } from './common.js';
 
 export interface RenderOptions {
@@ -71,6 +71,7 @@ export interface RenderErrorOptions {
 	 * Allows passing an error to 500.astro. It will be available through `Astro.props.error`.
 	 */
 	error?: unknown;
+	clientAddress: string | undefined;
 }
 
 export class App {
@@ -87,14 +88,14 @@ export class App {
 
 	constructor(manifest: SSRManifest, streaming = true) {
 		this.#manifest = manifest;
-		this.#manifestData = ensure404Route({
+		this.#manifestData = injectDefaultRoutes(manifest, {
 			routes: manifest.routes.map((route) => route.routeData),
 		});
 		this.#baseWithoutTrailingSlash = removeTrailingForwardSlash(this.#manifest.base);
 		this.#pipeline = this.#createPipeline(this.#manifestData, streaming);
 		this.#adapterLogger = new AstroIntegrationLogger(
 			this.#logger.options,
-			this.#manifest.adapterName
+			this.#manifest.adapterName,
 		);
 	}
 
@@ -110,31 +111,21 @@ export class App {
 	 * @private
 	 */
 	#createPipeline(manifestData: ManifestData, streaming = false) {
-		if (this.#manifest.checkOrigin) {
-			this.#manifest.middleware = sequence(
-				createOriginCheckMiddleware(),
-				this.#manifest.middleware
-			);
-		}
-
 		return AppPipeline.create(manifestData, {
 			logger: this.#logger,
 			manifest: this.#manifest,
-			mode: 'production',
+			runtimeMode: 'production',
 			renderers: this.#manifest.renderers,
+			defaultRoutes: createDefaultRoutes(this.#manifest),
 			resolve: async (specifier: string) => {
 				if (!(specifier in this.#manifest.entryModules)) {
 					throw new Error(`Unable to resolve [${specifier}]`);
 				}
 				const bundlePath = this.#manifest.entryModules[specifier];
-				switch (true) {
-					case bundlePath.startsWith('data:'):
-					case bundlePath.length === 0: {
-						return bundlePath;
-					}
-					default: {
-						return createAssetLink(bundlePath, this.#manifest.base, this.#manifest.assetsPrefix);
-					}
+				if (bundlePath.startsWith('data:') || bundlePath.length === 0) {
+					return bundlePath;
+				} else {
+					return createAssetLink(bundlePath, this.#manifest.base, this.#manifest.assetsPrefix);
 				}
 			},
 			serverLike: true,
@@ -145,6 +136,7 @@ export class App {
 	set setManifestData(newManifestData: ManifestData) {
 		this.#manifestData = newManifestData;
 	}
+
 	removeBase(pathname: string) {
 		if (pathname.startsWith(this.#manifest.base)) {
 			return pathname.slice(this.#baseWithoutTrailingSlash.length + 1);
@@ -206,7 +198,7 @@ export class App {
 					let locale;
 					const hostAsUrl = new URL(`${protocol}//${host}`);
 					for (const [domainKey, localeValue] of Object.entries(
-						this.#manifest.i18n.domainLookupTable
+						this.#manifest.i18n.domainLookupTable,
 					)) {
 						// This operation should be safe because we force the protocol via zod inside the configuration
 						// If not, then it means that the manifest was tampered
@@ -223,7 +215,7 @@ export class App {
 
 					if (locale) {
 						pathname = prependForwardSlash(
-							joinPaths(normalizeTheLocale(locale), this.removeBase(url.pathname))
+							joinPaths(normalizeTheLocale(locale), this.removeBase(url.pathname)),
 						);
 						if (url.pathname.endsWith('/')) {
 							pathname = appendForwardSlash(pathname);
@@ -232,7 +224,7 @@ export class App {
 				} catch (e: any) {
 					this.#logger.error(
 						'router',
-						`Astro tried to parse ${protocol}//${host} as an URL, but it threw a parsing error. Check the X-Forwarded-Host and X-Forwarded-Proto headers.`
+						`Astro tried to parse ${protocol}//${host} as an URL, but it threw a parsing error. Check the X-Forwarded-Host and X-Forwarded-Proto headers.`,
 					);
 					this.#logger.error('router', `Error: ${e}`);
 				}
@@ -241,53 +233,22 @@ export class App {
 		return pathname;
 	}
 
-	async render(request: Request, options?: RenderOptions): Promise<Response>;
-	/**
-	 * @deprecated Instead of passing `RouteData` and locals individually, pass an object with `routeData` and `locals` properties.
-	 * See https://github.com/withastro/astro/pull/9199 for more information.
-	 */
-	async render(request: Request, routeData?: RouteData, locals?: object): Promise<Response>;
-	async render(
-		request: Request,
-		routeDataOrOptions?: RouteData | RenderOptions,
-		maybeLocals?: object
-	): Promise<Response> {
+	async render(request: Request, renderOptions?: RenderOptions): Promise<Response> {
 		let routeData: RouteData | undefined;
 		let locals: object | undefined;
 		let clientAddress: string | undefined;
 		let addCookieHeader: boolean | undefined;
 
-		if (
-			routeDataOrOptions &&
-			('addCookieHeader' in routeDataOrOptions ||
-				'clientAddress' in routeDataOrOptions ||
-				'locals' in routeDataOrOptions ||
-				'routeData' in routeDataOrOptions)
-		) {
-			if ('addCookieHeader' in routeDataOrOptions) {
-				addCookieHeader = routeDataOrOptions.addCookieHeader;
-			}
-			if ('clientAddress' in routeDataOrOptions) {
-				clientAddress = routeDataOrOptions.clientAddress;
-			}
-			if ('routeData' in routeDataOrOptions) {
-				routeData = routeDataOrOptions.routeData;
-			}
-			if ('locals' in routeDataOrOptions) {
-				locals = routeDataOrOptions.locals;
-			}
-		} else {
-			routeData = routeDataOrOptions as RouteData | undefined;
-			locals = maybeLocals;
-			if (routeDataOrOptions || locals) {
-				this.#logRenderOptionsDeprecationWarning();
-			}
-		}
+		addCookieHeader = renderOptions?.addCookieHeader;
+		clientAddress = renderOptions?.clientAddress ?? Reflect.get(request, clientAddressSymbol);
+		routeData = renderOptions?.routeData;
+		locals = renderOptions?.locals;
+
 		if (routeData) {
 			this.#logger.debug(
 				'router',
 				'The adapter ' + this.#manifest.adapterName + ' provided a custom RouteData for ',
-				request.url
+				request.url,
 			);
 			this.#logger.debug('router', 'RouteData:\n' + routeData);
 		}
@@ -295,12 +256,8 @@ export class App {
 			if (typeof locals !== 'object') {
 				const error = new AstroError(AstroErrorData.LocalsNotAnObject);
 				this.#logger.error(null, error.stack!);
-				return this.#renderError(request, { status: 500, error });
+				return this.#renderError(request, { status: 500, error, clientAddress });
 			}
-			Reflect.set(request, clientLocalsSymbol, locals);
-		}
-		if (clientAddress) {
-			Reflect.set(request, clientAddressSymbol, clientAddress);
 		}
 		if (!routeData) {
 			routeData = this.match(request);
@@ -310,26 +267,29 @@ export class App {
 		if (!routeData) {
 			this.#logger.debug('router', "Astro hasn't found routes that match " + request.url);
 			this.#logger.debug('router', "Here's the available routes:\n", this.#manifestData);
-			return this.#renderError(request, { locals, status: 404 });
+			return this.#renderError(request, { locals, status: 404, clientAddress });
 		}
 		const pathname = this.#getPathnameFromRequest(request);
 		const defaultStatus = this.#getDefaultStatusCode(routeData, pathname);
-		const mod = await this.#pipeline.getModuleForRoute(routeData);
 
 		let response;
 		try {
-			const renderContext = RenderContext.create({
+			// Load route module. We also catch its error here if it fails on initialization
+			const mod = await this.#pipeline.getModuleForRoute(routeData);
+
+			const renderContext = await RenderContext.create({
 				pipeline: this.#pipeline,
 				locals,
 				pathname,
 				request,
 				routeData,
 				status: defaultStatus,
+				clientAddress,
 			});
 			response = await renderContext.render(await mod.page());
 		} catch (err: any) {
 			this.#logger.error(null, err.stack || err.message || String(err));
-			return this.#renderError(request, { locals, status: 500, error: err });
+			return this.#renderError(request, { locals, status: 500, error: err, clientAddress });
 		}
 
 		if (
@@ -343,6 +303,7 @@ export class App {
 				// We don't have an error to report here. Passing null means we pass nothing intentionally
 				// while undefined means there's no error
 				error: response.status === 500 ? null : undefined,
+				clientAddress,
 			});
 		}
 
@@ -359,15 +320,6 @@ export class App {
 
 		Reflect.set(response, responseSentSymbol, true);
 		return response;
-	}
-
-	#logRenderOptionsDeprecationWarning() {
-		if (this.#renderOptionsDeprecationWarningShown) return;
-		this.#logger.warn(
-			'deprecated',
-			`The adapter ${this.#manifest.adapterName} is using a deprecated signature of the 'app.render()' method. From Astro 4.0, locals and routeData are provided as properties on an optional object to this method. Using the old signature will cause an error in Astro 5.0. See https://github.com/withastro/astro/pull/9199 for more information.`
-		);
-		this.#renderOptionsDeprecationWarningShown = true;
 	}
 
 	setCookieHeaders(response: Response) {
@@ -399,7 +351,8 @@ export class App {
 			response: originalResponse,
 			skipMiddleware = false,
 			error,
-		}: RenderErrorOptions
+			clientAddress,
+		}: RenderErrorOptions,
 	): Promise<Response> {
 		const errorRoutePath = `/${status}${this.#manifest.trailingSlash === 'always' ? '/' : ''}`;
 		const errorRouteData = matchRoute(errorRoutePath, this.#manifestData);
@@ -409,27 +362,30 @@ export class App {
 				const maybeDotHtml = errorRouteData.route.endsWith(`/${status}`) ? '.html' : '';
 				const statusURL = new URL(
 					`${this.#baseWithoutTrailingSlash}/${status}${maybeDotHtml}`,
-					url
+					url,
 				);
-				const response = await fetch(statusURL.toString());
+				if (statusURL.toString() !== request.url) {
+					const response = await fetch(statusURL.toString());
 
-				// response for /404.html and 500.html is 200, which is not meaningful
-				// so we create an override
-				const override = { status };
+					// response for /404.html and 500.html is 200, which is not meaningful
+					// so we create an override
+					const override = { status };
 
-				return this.#mergeResponses(response, originalResponse, override);
+					return this.#mergeResponses(response, originalResponse, override);
+				}
 			}
 			const mod = await this.#pipeline.getModuleForRoute(errorRouteData);
 			try {
-				const renderContext = RenderContext.create({
+				const renderContext = await RenderContext.create({
 					locals,
 					pipeline: this.#pipeline,
-					middleware: skipMiddleware ? (_, next) => next() : undefined,
+					middleware: skipMiddleware ? NOOP_MIDDLEWARE_FN : undefined,
 					pathname: this.#getPathnameFromRequest(request),
 					request,
 					routeData: errorRouteData,
 					status,
 					props: { error },
+					clientAddress,
 				});
 				const response = await renderContext.render(await mod.page());
 				return this.#mergeResponses(response, originalResponse);
@@ -441,6 +397,7 @@ export class App {
 						status,
 						response: originalResponse,
 						skipMiddleware: true,
+						clientAddress,
 					});
 				}
 			}
@@ -454,7 +411,7 @@ export class App {
 	#mergeResponses(
 		newResponse: Response,
 		originalResponse?: Response,
-		override?: { status: 404 | 500 }
+		override?: { status: 404 | 500 },
 	) {
 		if (!originalResponse) {
 			if (override !== undefined) {
@@ -480,6 +437,15 @@ export class App {
 			// this function could throw an error...
 			originalResponse.headers.delete('Content-type');
 		} catch {}
+		// we use a map to remove duplicates
+		const mergedHeaders = new Map([
+			...Array.from(newResponse.headers),
+			...Array.from(originalResponse.headers),
+		]);
+		const newHeaders = new Headers();
+		for (const [name, value] of mergedHeaders) {
+			newHeaders.set(name, value);
+		}
 		return new Response(newResponse.body, {
 			status,
 			statusText: status === 200 ? newResponse.statusText : originalResponse.statusText,
@@ -488,15 +454,12 @@ export class App {
 			// If users see something weird, it's because they are setting some headers they should not.
 			//
 			// Although, we don't want it to replace the content-type, because the error page must return `text/html`
-			headers: new Headers([
-				...Array.from(newResponse.headers),
-				...Array.from(originalResponse.headers),
-			]),
+			headers: newHeaders,
 		});
 	}
 
 	#getDefaultStatusCode(routeData: RouteData, pathname: string): number {
-		if (!routeData.pattern.exec(pathname)) {
+		if (!routeData.pattern.test(pathname)) {
 			for (const fallbackRoute of routeData.fallbackRoutes) {
 				if (fallbackRoute.pattern.test(pathname)) {
 					return 302;

@@ -1,16 +1,16 @@
 import { fileURLToPath } from 'node:url';
 import ancestor from 'common-ancestor-path';
-import type { AstroConfig } from '../@types/astro.js';
 import {
 	appendExtension,
 	appendForwardSlash,
 	removeLeadingForwardSlashWindows,
 } from '../core/path.js';
 import { viteID } from '../core/util.js';
+import type { AstroConfig } from '../types/public/config.js';
 
 export function getFileInfo(id: string, config: AstroConfig) {
 	const sitePathname = appendForwardSlash(
-		config.site ? new URL(config.base, config.site).pathname : config.base
+		config.site ? new URL(config.base, config.site).pathname : config.base,
 	);
 
 	const fileId = id.split('?')[0];
@@ -49,4 +49,13 @@ export function normalizeFilename(filename: string, root: URL) {
 const postfixRE = /[?#].*$/s;
 export function cleanUrl(url: string): string {
 	return url.replace(postfixRE, '');
+}
+
+const specialQueriesRE = /(?:\?|&)(?:url|raw|direct)(?:&|$)/;
+/**
+ * Detect `?url`, `?raw`, and `?direct`, in which case we usually want to skip
+ * transforming any code with this queries as Vite will handle it directly.
+ */
+export function hasSpecialQueries(id: string): boolean {
+	return specialQueriesRE.test(id);
 }

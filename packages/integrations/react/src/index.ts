@@ -57,14 +57,8 @@ function optionsPlugin(
 }
 
 function getViteConfiguration(
-	{
-		include,
-		exclude,
-		babel,
-		experimentalReactChildren,
-		experimentalDisableStreaming,
-	}: ReactIntegrationOptions = {},
-	reactConfig: ReactVersionConfig
+	{ include, exclude, babel, experimentalReactChildren, experimentalDisableStreaming }: ReactIntegrationOptions = {},
+	reactConfig: ReactVersionConfig,
 ) {
 	return {
 		optimizeDeps: {
@@ -119,7 +113,7 @@ export default function ({
 				updateConfig({
 					vite: getViteConfiguration(
 						{ include, exclude, babel, experimentalReactChildren, experimentalDisableStreaming },
-						versionConfig
+						versionConfig,
 					),
 				});
 				if (command === 'dev') {

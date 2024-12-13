@@ -1,21 +1,21 @@
 import type * as hast from 'hast';
 import type * as mdast from 'mdast';
 import type { Options as RemarkRehypeOptions } from 'remark-rehype';
-import type {
-	BuiltinTheme,
-	LanguageRegistration,
-	ShikiTransformer,
-	ThemeRegistration,
-	ThemeRegistrationRaw,
-} from 'shiki';
+import type { BuiltinTheme } from 'shiki';
 import type * as unified from 'unified';
-import type { VFile } from 'vfile';
+import type { CreateShikiHighlighterOptions, ShikiHighlighterHighlightOptions } from './shiki.js';
 
 export type { Node } from 'unist';
 
-export type MarkdownAstroData = {
-	frontmatter: Record<string, any>;
-};
+declare module 'vfile' {
+	interface DataMap {
+		astro: {
+			headings?: MarkdownHeading[];
+			imagePaths?: string[];
+			frontmatter?: Record<string, any>;
+		};
+	}
+}
 
 export type RemarkPlugin<PluginParameters extends any[] = any[]> = unified.Plugin<
 	PluginParameters,
@@ -35,13 +35,9 @@ export type RemarkRehype = RemarkRehypeOptions;
 
 export type ThemePresets = BuiltinTheme | 'css-variables';
 
-export interface ShikiConfig {
-	langs?: LanguageRegistration[];
-	theme?: ThemePresets | ThemeRegistration | ThemeRegistrationRaw;
-	themes?: Record<string, ThemePresets | ThemeRegistration | ThemeRegistrationRaw>;
-	wrap?: boolean | null;
-	transformers?: ShikiTransformer[];
-}
+export interface ShikiConfig
+	extends Pick<CreateShikiHighlighterOptions, 'langs' | 'theme' | 'themes' | 'langAlias'>,
+		Pick<ShikiHighlighterHighlightOptions, 'defaultColor' | 'wrap' | 'transformers'> {}
 
 export interface AstroMarkdownOptions {
 	syntaxHighlight?: 'shiki' | 'prism' | false;
@@ -56,7 +52,7 @@ export interface AstroMarkdownOptions {
 export interface MarkdownProcessor {
 	render: (
 		content: string,
-		opts?: MarkdownProcessorRenderOptions
+		opts?: MarkdownProcessorRenderOptions,
 	) => Promise<MarkdownProcessorRenderResult>;
 }
 
@@ -71,7 +67,7 @@ export interface MarkdownProcessorRenderResult {
 	code: string;
 	metadata: {
 		headings: MarkdownHeading[];
-		imagePaths: Set<string>;
+		imagePaths: string[];
 		frontmatter: Record<string, any>;
 	};
 }
@@ -80,11 +76,4 @@ export interface MarkdownHeading {
 	depth: number;
 	slug: string;
 	text: string;
-}
-
-export interface MarkdownVFile extends VFile {
-	data: {
-		__astroHeadings?: MarkdownHeading[];
-		imagePaths?: Set<string>;
-	};
 }

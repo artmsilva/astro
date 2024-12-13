@@ -71,10 +71,8 @@ describe('astro:env secret variables', () => {
 	it('fails if validateSecrets is enabled and secret is not set', async () => {
 		fixture = await loadFixture({
 			root: './fixtures/astro-env-server-secret/',
-			experimental: {
-				env: {
-					validateSecrets: true,
-				},
+			env: {
+				validateSecrets: true,
 			},
 		});
 
@@ -84,7 +82,7 @@ describe('astro:env secret variables', () => {
 		} catch (error) {
 			assert.equal(error instanceof Error, true);
 			assert.equal(error.title, 'Invalid Environment Variables');
-			assert.equal(error.message.includes('Variable KNOWN_SECRET is not of type: number.'), true);
+			assert.equal(error.message.includes('KNOWN_SECRET is missing'), true);
 		}
 	});
 });

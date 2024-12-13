@@ -1,65 +1,56 @@
-import type fsMod from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { type Plugin, loadEnv } from 'vite';
-import type { AstroSettings } from '../@types/astro.js';
+import { readFileSync } from 'node:fs';
+import type { Plugin } from 'vite';
 import { AstroError, AstroErrorData } from '../core/errors/index.js';
+import type { AstroSettings } from '../types/astro.js';
 import {
 	MODULE_TEMPLATE_URL,
 	VIRTUAL_MODULES_IDS,
 	VIRTUAL_MODULES_IDS_VALUES,
 } from './constants.js';
+import type { EnvLoader } from './env-loader.js';
+import { type InvalidVariable, invalidVariablesToError } from './errors.js';
 import type { EnvSchema } from './schema.js';
-import { validateEnvVariable } from './validators.js';
+import { getEnvFieldType, validateEnvVariable } from './validators.js';
 
-// TODO: reminders for when astro:env comes out of experimental
-// Types should always be generated (like in types/content.d.ts). That means the client module will be empty
-// and server will only contain getSecret for unknown variables. Then, specifying a schema should only add
-// variables as needed. For secret variables, it will only require specifying SecretValues and it should get
-// merged with the static types/content.d.ts
-
-interface AstroEnvVirtualModPluginParams {
+interface AstroEnvPluginParams {
 	settings: AstroSettings;
-	mode: 'dev' | 'build' | string;
-	fs: typeof fsMod;
+	mode: string;
 	sync: boolean;
+	envLoader: EnvLoader;
 }
 
-export function astroEnv({
-	settings,
-	mode,
-	fs,
-	sync,
-}: AstroEnvVirtualModPluginParams): Plugin | undefined {
-	if (!settings.config.experimental.env || sync) {
-		return;
-	}
-	const schema = settings.config.experimental.env.schema ?? {};
+export function astroEnv({ settings, mode, sync, envLoader }: AstroEnvPluginParams): Plugin {
+	const { schema, validateSecrets } = settings.config.env;
+	let isDev: boolean;
 
 	let templates: { client: string; server: string; internal: string } | null = null;
 
 	return {
 		name: 'astro-env-plugin',
 		enforce: 'pre',
+		config(_, { command }) {
+			isDev = command !== 'build';
+		},
 		buildStart() {
-			const loadedEnv = loadEnv(
-				mode === 'dev' ? 'development' : 'production',
-				fileURLToPath(settings.config.root),
-				''
-			);
-			for (const [key, value] of Object.entries(loadedEnv)) {
-				if (value !== undefined) {
-					process.env[key] = value;
+			const loadedEnv = envLoader.load(mode, settings.config);
+
+			if (!isDev) {
+				for (const [key, value] of Object.entries(loadedEnv)) {
+					if (value !== undefined) {
+						process.env[key] = value;
+					}
 				}
 			}
 
 			const validatedVariables = validatePublicVariables({
 				schema,
 				loadedEnv,
-				validateSecrets: settings.config.experimental.env?.validateSecrets ?? false,
+				validateSecrets,
+				sync,
 			});
 
 			templates = {
-				...getTemplates(schema, fs, validatedVariables),
+				...getTemplates(schema, validatedVariables, isDev ? loadedEnv : null),
 				internal: `export const schema = ${JSON.stringify(schema)};`,
 			};
 		},
@@ -99,13 +90,15 @@ function validatePublicVariables({
 	schema,
 	loadedEnv,
 	validateSecrets,
+	sync,
 }: {
 	schema: EnvSchema;
 	loadedEnv: Record<string, string>;
 	validateSecrets: boolean;
+	sync: boolean;
 }) {
 	const valid: Array<{ key: string; value: any; type: string; context: 'server' | 'client' }> = [];
-	const invalid: Array<{ key: string; type: string }> = [];
+	const invalid: Array<InvalidVariable> = [];
 
 	for (const [key, options] of Object.entries(schema)) {
 		const variable = loadedEnv[key] === '' ? undefined : loadedEnv[key];
@@ -115,20 +108,19 @@ function validatePublicVariables({
 		}
 
 		const result = validateEnvVariable(variable, options);
+		const type = getEnvFieldType(options);
 		if (!result.ok) {
-			invalid.push({ key, type: result.type });
+			invalid.push({ key, type, errors: result.errors });
 			// We don't do anything with validated secrets so we don't store them
 		} else if (options.access === 'public') {
-			valid.push({ key, value: result.value, type: result.type, context: options.context });
+			valid.push({ key, value: result.value, type, context: options.context });
 		}
 	}
 
-	if (invalid.length > 0) {
+	if (invalid.length > 0 && !sync) {
 		throw new AstroError({
 			...AstroErrorData.EnvInvalidVariables,
-			message: AstroErrorData.EnvInvalidVariables.message(
-				invalid.map(({ key, type }) => `Variable ${key} is not of type: ${type}.`).join('\n')
-			),
+			message: AstroErrorData.EnvInvalidVariables.message(invalidVariablesToError(invalid)),
 		});
 	}
 
@@ -137,11 +129,11 @@ function validatePublicVariables({
 
 function getTemplates(
 	schema: EnvSchema,
-	fs: typeof fsMod,
-	validatedVariables: ReturnType<typeof validatePublicVariables>
+	validatedVariables: ReturnType<typeof validatePublicVariables>,
+	loadedEnv: Record<string, string> | null,
 ) {
 	let client = '';
-	let server = fs.readFileSync(MODULE_TEMPLATE_URL, 'utf-8');
+	let server = readFileSync(MODULE_TEMPLATE_URL, 'utf-8');
 	let onSetGetEnv = '';
 
 	for (const { key, value, context } of validatedVariables) {
@@ -159,10 +151,15 @@ function getTemplates(
 		}
 
 		server += `export let ${key} = _internalGetSecret(${JSON.stringify(key)});\n`;
-		onSetGetEnv += `${key} = reset ? undefined : _internalGetSecret(${JSON.stringify(key)});\n`;
+		onSetGetEnv += `${key} = _internalGetSecret(${JSON.stringify(key)});\n`;
 	}
 
 	server = server.replace('// @@ON_SET_GET_ENV@@', onSetGetEnv);
+	if (loadedEnv) {
+		server = server.replace('// @@GET_ENV@@', `return (${JSON.stringify(loadedEnv)})[key];`);
+	} else {
+		server = server.replace('// @@GET_ENV@@', 'return _getEnv(key);');
+	}
 
 	return {
 		client,

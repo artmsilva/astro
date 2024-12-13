@@ -115,12 +115,7 @@ describe('Astro basic build', () => {
 		const html = await fixture.readFile('/chinese-encoding-md/index.html');
 		const $ = cheerio.load(html);
 		assert.equal($('h1').text(), '我的第一篇博客文章');
-	});
-
-	it('renders MDX in utf-8 by default', async () => {
-		const html = await fixture.readFile('/chinese-encoding-mdx/index.html');
-		const $ = cheerio.load(html);
-		assert.equal($('h1').text(), '我的第一篇博客文章');
+		assert.match(html, /<meta charset="utf-8"/);
 	});
 
 	it('Supports void elements whose name is a string (#2062)', async () => {
@@ -139,7 +134,7 @@ describe('Astro basic build', () => {
 		// <Input type="select"><option>option</option></Input>
 		assert.equal(
 			$('body > :nth-child(4)').prop('outerHTML'),
-			'<select><option>option</option></select>'
+			'<select><option>option</option></select>',
 		);
 
 		// <Input type="textarea">textarea</Input>
@@ -157,6 +152,19 @@ describe('Astro basic build', () => {
 		const html = await fixture.readFile('/fileurl/index.html');
 		const $ = cheerio.load(html);
 		assert.equal($('h1').text(), 'WORKS');
+	});
+
+	it('Handles importing .astro?raw correctly', async () => {
+		const html = await fixture.readFile('/import-queries/raw/index.html');
+		const $ = cheerio.load(html);
+		const rawValue = $('.raw-value').text();
+		assert.match(rawValue, /<h1>Hello<\/h1>/);
+		assert.match(rawValue, /<script>/);
+		assert.match(rawValue, /<style>/);
+		// The rest of HTML should not contain any scripts or styles hoisted from the raw import
+		const otherHtml = html.replace(rawValue, '');
+		assert.doesNotMatch(otherHtml, /<script/);
+		assert.doesNotMatch(otherHtml, /<style/);
 	});
 
 	describe('preview', () => {
@@ -194,21 +202,22 @@ describe('Astro basic development', () => {
 		const html = await res.text();
 		const $ = cheerio.load(html);
 		assert.equal($('h1').text(), '我的第一篇博客文章');
-		const isUtf8 =
-			res.headers.get('content-type').includes('charset=utf-8') ||
-			html.includes('<meta charset="utf-8">');
-		assert.ok(isUtf8);
+		assert.doesNotMatch(res.headers.get('content-type'), /charset=utf-8/);
+		assert.match(html, /<meta charset="utf-8"/);
 	});
 
-	it('Renders MDX in utf-8 by default', async () => {
-		const res = await fixture.fetch('/chinese-encoding-mdx');
+	it('Handles importing .astro?raw correctly', async () => {
+		const res = await fixture.fetch('/import-queries/raw/index.html');
 		assert.equal(res.status, 200);
 		const html = await res.text();
 		const $ = cheerio.load(html);
-		assert.equal($('h1').text(), '我的第一篇博客文章');
-		const isUtf8 =
-			res.headers.get('content-type').includes('charset=utf-8') ||
-			html.includes('<meta charset="utf-8">');
-		assert.ok(isUtf8);
+		const rawValue = $('.raw-value').text();
+		assert.match(rawValue, /<h1>Hello<\/h1>/);
+		assert.match(rawValue, /<script>/);
+		assert.match(rawValue, /<style>/);
+		// The rest of HTML should not contain any scripts or styles hoisted from the raw import.
+		// However we don't check them here as dev plugins could add scripts and styles dynam
+		assert.doesNotMatch(html, /_content.astro\?astro&type=style/);
+		assert.doesNotMatch(html, /_content.astro\?astro&type=script/);
 	});
 });

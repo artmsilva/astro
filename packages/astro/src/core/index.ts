@@ -1,6 +1,6 @@
 // This is the main entrypoint when importing the `astro` package.
 
-import type { AstroInlineConfig } from '../@types/astro.js';
+import type { AstroInlineConfig } from '../types/public/config.js';
 import { default as _build } from './build/index.js';
 import { default as _sync } from './sync/index.js';
 
@@ -22,5 +22,5 @@ export const build = (inlineConfig: AstroInlineConfig) => _build(inlineConfig);
  *
  * @experimental The JavaScript API is experimental
  */
-// Wrap `_sync` to prevent exposing the second internal options parameter
+// Wrap `_sync` to prevent exposing internal options
 export const sync = (inlineConfig: AstroInlineConfig) => _sync(inlineConfig);
